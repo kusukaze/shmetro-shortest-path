@@ -1,0 +1,429 @@
+<html>
+
+<head>
+	<meta charset="UTF-8">
+	<title>地铁最短路径</title>
+	<link rel="stylesheet" href="index.css" charset="UTF-8">
+	<script src="stationListShanghai.js" charset="UTF-8"></script>
+	<script src="edgeListShanghai.js" charset="UTF-8"></script>
+	<script src="lineColorDictShanghai.js" charset="UTF-8"></script>
+	<script src="stationListTest.js" charset="UTF-8"></script>
+	<script src="edgeListTest.js" charset="UTF-8"></script>
+	<script src="dropDownMenu.js" charset="UTF-8"></script>
+	<script>
+		// 最大车站数量
+		const MAX_STATION_NUM = 900;
+		// 无穷大常量999999999
+		const INF_VALUE = 999999999;
+		// dijkstra算法最大循环次数
+		const MAX_LOOP_TIME = 1500;
+
+		// 原始车站列表
+		var stationList;
+		// 原始站距列表
+		var edgeList;
+		// 线路颜色字典
+		var lineColorDict;
+		// 拼音列表，供下拉框搜索[[站名，拼音]]
+		var itemPinyinList;
+		// graphMatrix为二维数组，保存图的邻接矩阵，初始化为inf
+		var graphMatrix;
+		// edgeTypeMatrix为二维数组，保存边的类型
+		var edgeTypeMatrix;
+		// stationDict字典记录【车站编号】和【下标】的对应关系
+		var stationDict;
+		// stationNameDict字典记录【车站名称】和【下标】的对应关系
+		var stationNameDict;
+		// dijkstra数组记录起始车站到每个车站当前计算出来的最小总里程数
+		var dijkstraArray;
+		// visited数组记录车站是否已经访问过，0为未访问，1为已访问
+		var visited;
+		// path数组记录起点到当前车站的路径
+		var path;
+		// lastVisited记录最短路径的上一个站点
+		var lastVisited;
+		// edgeTypeDetailDict记录每种单价的路径长度
+		var edgeTypeDetailDict;
+
+		// 阶梯票价计算
+		function priceCalc(distance, distanceList, priceList) {
+			for (let i = 1; i < distanceList.length; i++) {
+				if (distanceList[i] >= distance) {
+					return priceList[i - 1];
+				}
+			}
+			return priceList[distanceList.length - 1];
+		}
+
+		function clearText() {
+			document.getElementById("startInput").value = "";
+			document.getElementById("endInput").value = "";
+		}
+
+		function loadAllDropMenu() {
+			loadDropMenu('startInput', 'startDropdownMenu', itemPinyinList);
+			loadDropMenu('endInput', 'endDropdownMenu', itemPinyinList);
+		}
+
+		// 根据城市选择数据，并加载下拉框
+		function loadCityData() {
+			let city = document.getElementById("citySel").value;
+			if (city == "Shanghai") {
+				stationList = stationListShanghai;
+				edgeList = edgeListShanghai;
+				lineColorDict = lineColorDictShanghai;
+			}
+			else if (city == "Beijing") {
+				// 在这里加载北京地铁数据
+				// 记得先在文件开头引入数据文件
+				// 并且在城市选项中添加城市
+				// 再编写票价计算规则
+			}
+			else if (city == "Test") { // 测试数据
+				stationList = stationListTest;
+				edgeList = edgeListTest;
+				lineColorDict = {};
+			}
+			else {
+				return;
+			}
+
+			itemPinyinList = stationList.map(subarray => [subarray[1],
+			subarray.length >= 3 ? subarray[2].toUpperCase() : "",
+			lineColorDict[subarray[0].slice(0, 2)] || "none"]);
+
+			// 3、4号线颜色特别处理
+			if (city == "Shanghai") {
+				itemPinyinList = itemPinyinList.map(subarray => [
+					subarray[0], subarray[1],
+					subarray[0].includes("【3/4】") ? lineColorDict["03"] + '\n' + lineColorDict["04"] : subarray[2]]);
+				console.log(itemPinyinList);
+			}
+
+			stationDict = {};
+			stationNameDict = {};
+			for (let i = 0; i < stationList.length; i++) {
+				stationDict[stationList[i][0]] = i;
+				stationNameDict[stationList[i][1]] = i;
+			}
+			loadAllDropMenu();
+			clearText();
+		}
+
+		// 加载图
+		function loadGraph(date) {
+			graphMatrix = new Array(MAX_STATION_NUM);
+			edgeTypeMatrix = new Array(MAX_STATION_NUM);
+			for (let i = 0; i < MAX_STATION_NUM; i++) {
+				graphMatrix[i] = new Array(MAX_STATION_NUM).fill(INF_VALUE);
+				edgeTypeMatrix[i] = new Array(MAX_STATION_NUM).fill('');
+			}
+
+			// 根据当前日期，读取边的长度并加载进graphMatrix
+			for (let i = 0; i < edgeList.length; i++) {
+				let src = stationDict[edgeList[i][0]];
+				let dst = stationDict[edgeList[i][1]];
+				let weight = parseFloat(edgeList[i][2]);
+				if (date >= edgeList[i][3]) {
+					graphMatrix[src][dst] = weight;
+					graphMatrix[dst][src] = weight;
+					edgeTypeMatrix[src][dst] = edgeList[i][4];
+					edgeTypeMatrix[dst][src] = edgeList[i][4];
+				}
+			}
+
+		}
+
+		// 运行dijkstra算法
+		function dijkstra(startSta, endSta) {
+			// 初始化数组
+			dijkstraArray = new Array(MAX_STATION_NUM).fill(INF_VALUE);
+			visited = new Array(MAX_STATION_NUM).fill(0);
+			path = new Array(MAX_STATION_NUM).fill("");
+			lastVisited = new Array(MAX_STATION_NUM).fill(INF_VALUE);
+
+
+			// 初始化起点
+			dijkstraArray[startSta] = 0;
+			path[startSta] = stationList[startSta][1];
+
+			for (let time = 0; time < MAX_LOOP_TIME; time++) {
+				let nowMin = INF_VALUE;
+				let nowPos = INF_VALUE;
+				let nowMinText = "";
+
+				// 在dijkstra数组中寻找未访问过的最小值
+				for (let i = 0; i < MAX_STATION_NUM; i++) {
+					let isShorterStation = (dijkstraArray[i] < nowMin)
+						|| (dijkstraArray[i] == nowMin && nowMinText.length < path[i].length);
+					if (visited[i] == 0 && isShorterStation) {
+						nowPos = i;
+						nowMin = dijkstraArray[i];
+						nowMinText = path[i];
+					}
+				}
+
+				// 未找到，说明无法再抵达其他车站，退出循环
+				if (nowPos == INF_VALUE) {
+					break;
+				}
+
+				// 已找到，访问该车站，并更新其相邻车站在dijkstra数组的值
+				visited[nowPos] = 1;
+				for (let i = 0; i < MAX_STATION_NUM; i++) {
+					if (graphMatrix[nowPos][i] < INF_VALUE) {
+						let currentDist = nowMin + graphMatrix[nowPos][i];
+						if (currentDist < dijkstraArray[i]) {
+							dijkstraArray[i] = currentDist;
+							path[i] = nowMinText + "-" + stationList[i][1];
+							lastVisited[i] = nowPos;
+						}
+					}
+				}
+			}
+
+			// 统计每种票价的路径长度
+			let currSta = endSta;
+			edgeTypeDetailDict = {};
+			while (lastVisited[currSta] != INF_VALUE) {
+
+				let lastSta = lastVisited[currSta];
+				let edgeType = edgeTypeMatrix[lastSta][currSta];
+				let weight = graphMatrix[lastSta][currSta];
+				if (!(edgeType in edgeTypeDetailDict)) {
+					edgeTypeDetailDict[edgeType] = 0;
+				}
+				edgeTypeDetailDict[edgeType] += weight;
+				currSta = lastVisited[currSta];
+			}
+		}
+
+		// 输出结果
+		function outputResult(city, startSta, endSta) {
+			let price = 0;
+
+			let distance = dijkstraArray[endSta];
+			let distanceDetail = "";
+
+			if (city == "Shanghai") {
+				let metroDistance = edgeTypeDetailDict["Metro"] || 0;
+				let railDistance_1 = edgeTypeDetailDict["Rail_1"] || 0;
+				let metroPrice = Math.ceil((metroDistance + 24000) / 10000);
+				let railPrice = Math.floor(railDistance_1 / 1000 * 0.45 + 0.5);
+				if (metroDistance > 0 && railDistance_1 > 0) {
+					price = metroPrice + railPrice;
+				}
+				else if (metroDistance > 0) {
+					railPrice = 0;
+					price = metroPrice;
+				}
+				else if (railDistance_1 > 0) {
+					metroPrice = 0;
+					railPrice = Math.max(railPrice, 4);
+					price = railPrice;
+				}
+				else {
+					let startStationId = stationList[startSta][0];
+					let endStationId = stationList[endSta][0];
+					let isZhongChunLu = startStationId == "0910" || endStationId == "0910"
+						|| startStationId == "5132" || endStationId == "5132";
+					if (isZhongChunLu) {
+						metroPrice = 3;
+						railPrice = 0;
+						price = 3;
+					}
+					else if (startStationId.startsWith("51") || endStationId.startsWith("51")) {
+						metroPrice = 0;
+						railPrice = 4;
+						price = 4;
+					}
+					else {
+						metroPrice = 3;
+						railPrice = 0;
+						price = 3;
+					}
+				}
+
+				distanceDetail = "。其中，地铁里程：" + metroDistance + "（" + metroPrice
+					+ "元） ，市域里程（高速线路）：" + railDistance_1 + "（" + railPrice + "元）";
+			}
+			else if (city == "Beijing") {
+				// 在这里填写北京地铁计价规则
+				let distanceList = [0, 6000, 12000, 22000];
+				let priceList = [3, 4, 5, 6];
+				if (distance > 32000) {
+					price = Math.ceil((distance + 88000) / 20000);
+				}
+				else {
+					price = priceCalc(distance, distanceList, priceList);
+				}
+			}
+			else if (city == "Test") {
+				price = Math.ceil((distance + 24) / 10);
+			}
+
+			if (dijkstraArray[endSta] == INF_VALUE) {
+				document.getElementById("resultSpan").innerHTML = "未查询到结果。";
+				document.getElementById("resultSpan1").innerHTML = "可能当时部分线路仍未通车。";
+				document.getElementById("resultSpan2").innerHTML = "请留意您选择的时间与相关线路开通日期。";
+				document.getElementById("resultSpan3").innerHTML = "";
+				document.getElementById("resultSpan4").innerHTML = "";
+
+
+			}
+			else {
+				document.getElementById("resultSpan").innerHTML = "经停站点：" + path[endSta];
+				document.getElementById("resultSpan1").innerHTML = "最短里程：" + dijkstraArray[endSta] + distanceDetail;
+				document.getElementById("resultSpan2").innerHTML = "票价：" + price + "元";
+				//document.getElementById("resultSpan3").innerHTML = "其中商务座里程：" + dijkstraArraySpecial[endSta];
+				//document.getElementById("resultSpan4").innerHTML = "商务座票价：" + priceSpecial + "元";
+
+			}
+		}
+
+		function test(startSta, endSta, date) {
+			let city = document.getElementById("citySel").value;
+			loadGraph(date);
+			dijkstra(startSta, endSta);
+			outputResult(city, startSta, endSta);
+		}
+
+		function cal() {
+			let startS = document.getElementById("startInput").value;
+			let startId = stationNameDict[startS];
+			let endS = document.getElementById("endInput").value;
+			let endId = stationNameDict[endS];
+			let date = document.getElementById("yearSel").value
+				+ document.getElementById("monthSel").value
+				+ document.getElementById("daySel").value;
+			test(startId, endId, date);
+		}
+
+	</script>
+</head>
+
+<body>
+	地铁最短路径<br>
+
+	城市：
+	<select id="citySel" onchange="loadCityData()">
+		<option value="Shanghai">上海</option>
+		<option value="Test">测试</option>
+	</select>
+
+	<br>
+
+	出发日期
+	<select id="yearSel">
+		<option value="2008">2008</option>
+		<option value="2009">2009</option>
+		<option value="2010">2010</option>
+		<option value="2011">2011</option>
+		<option value="2012">2012</option>
+		<option value="2013">2013</option>
+		<option value="2014">2014</option>
+		<option value="2015">2015</option>
+		<option value="2016">2016</option>
+		<option value="2017">2017</option>
+		<option value="2018">2018</option>
+		<option value="2019">2019</option>
+		<option value="2020">2020</option>
+		<option value="2021">2021</option>
+		<option value="2022">2022</option>
+		<option value="2023">2023</option>
+		<option value="2024">2024</option>
+		<option value="2025" selected>2025</option>
+		<option value="2032">2032</option>
+
+	</select>年<select id="monthSel">
+		<option value="01">1</option>
+		<option value="02">2</option>
+		<option value="03">3</option>
+		<option value="04">4</option>
+		<option value="05">5</option>
+		<option value="06">6</option>
+		<option value="07">7</option>
+		<option value="08">8</option>
+		<option value="09">9</option>
+		<option value="10">10</option>
+		<option value="11">11</option>
+		<option value="12">12</option>
+	</select>月<select id="daySel">
+		<option value="01">1</option>
+		<option value="02">2</option>
+		<option value="03">3</option>
+		<option value="04">4</option>
+		<option value="05">5</option>
+		<option value="06">6</option>
+		<option value="07">7</option>
+		<option value="08">8</option>
+		<option value="09">9</option>
+		<option value="10">10</option>
+		<option value="11">11</option>
+		<option value="12">12</option>
+		<option value="13">13</option>
+		<option value="14">14</option>
+		<option value="15">15</option>
+		<option value="16">16</option>
+		<option value="17">17</option>
+		<option value="18">18</option>
+		<option value="19">19</option>
+		<option value="20">20</option>
+		<option value="21">21</option>
+		<option value="22">22</option>
+		<option value="23">23</option>
+		<option value="24">24</option>
+		<option value="25">25</option>
+		<option value="26">26</option>
+		<option value="27">27</option>
+		<option value="28">28</option>
+		<option value="29">29</option>
+		<option value="30">30</option>
+		<option value="31">31</option>
+	</select>日
+	<br>
+	<br>
+	<div class="search-container">
+		<input id="startInput" class="search-input" type="text" placeholder="请输入起点（文字 / 拼音首字母）">
+		<ul id="startDropdownMenu" class="dropdown-menu"></ul>
+	</div>
+	<label> → </label>
+	<div class="search-container">
+		<input id="endInput" class="search-input" type="text" placeholder="请输入终点（文字 / 拼音首字母）">
+		<ul id="endDropdownMenu" class="dropdown-menu"></ul>
+	</div>
+
+	<br>
+
+	<br>
+	<input type="button" value="测算" onclick="cal()" ;>
+	<input type="button" value="清空" onclick="clearText()" ;>
+	<br>
+	<br>
+
+	<span id="resultSpan"></span>
+	<br>
+
+	<span id="resultSpan1"></span>
+	<br>
+
+	<span id="resultSpan2"></span>
+
+	<br>
+
+	<span id="resultSpan3"></span>
+
+	<br>
+
+	<span id="resultSpan4"></span>
+
+
+
+	<script>
+		loadCityData();
+		loadAllDropMenu();
+	</script>
+
+</body>
+
+</html>
